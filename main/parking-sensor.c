@@ -6,6 +6,7 @@
 #include "esp_private/esp_clk.h"
 #include "driver/mcpwm_cap.h"
 #include "driver/gpio.h"
+#include "esp_http_client.h"
 
 const static char *TAG = "example";
 
@@ -79,13 +80,40 @@ static esp_err_t connect_to_wifi(void) {
     return ESP_OK;
 }
 
+void http_post_task(void *pvParameters) {
+    float value = *(float *)pvParameters;
+    
+    char payload[64];
+    
+    snprintf(payload, sizeof(payload), "{\"distance\": %.2f}", value);
+    
+    esp_http_client_config_t config = {
+        .url = SERVER_ADDR,
+        .method = HTTP_METHOD_POST,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+
+    esp_http_client_set_post_field(client, (const char *)payload, strlen(payload));
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+
+    esp_err_t err = esp_http_client_perform(client);
+    if (err == ESP_OK) {
+        ESP_LOGI("HTTP", "Status = %d", esp_http_client_get_status_code(client));
+    } else {
+        ESP_LOGE("HTTP", "Request failed: %s", esp_err_to_name(err));
+    }
+
+    esp_http_client_cleanup(client);
+    vTaskDelete(NULL); 
+}
+
 void app_main(void)
 {
-    
-    ESP_LOGI(TAG, "Starting parking sensor");
-   
+    ESP_LOGI(TAG, "Connecting to wifi...");
     ESP_ERROR_CHECK(connect_to_wifi());
     
+    ESP_LOGI(TAG, "Starting parking sensor");
     ESP_LOGI(TAG, "Install capture timer");
     mcpwm_cap_timer_handle_t cap_timer = NULL;
     mcpwm_capture_timer_config_t cap_conf = {
@@ -99,12 +127,10 @@ void app_main(void)
     mcpwm_capture_channel_config_t cap_ch_conf = {
         .gpio_num = HC_SR04_ECHO_GPIO,
         .prescale = 1,
-        // capture on both edge
         .flags.neg_edge = true,
         .flags.pos_edge = true,
     };
     ESP_ERROR_CHECK(mcpwm_new_capture_channel(cap_timer, &cap_ch_conf, &cap_chan));
-    // pull up the GPIO internally
     ESP_ERROR_CHECK(gpio_set_pull_mode(HC_SR04_ECHO_GPIO, GPIO_PULLUP_ONLY));
 
     ESP_LOGI(TAG, "Register capture callback");
@@ -123,7 +149,6 @@ void app_main(void)
         .pin_bit_mask = 1ULL << HC_SR04_TRIG_GPIO,
     };
     ESP_ERROR_CHECK(gpio_config(&io_conf));
-    // drive low by default
     ESP_ERROR_CHECK(gpio_set_level(HC_SR04_TRIG_GPIO, 0));
 
     ESP_LOGI(TAG, "Enable and start capture timer");
@@ -144,6 +169,7 @@ void app_main(void)
             // convert the pulse width into measure distance
             float distance = (float) pulse_width_us / 58;
             ESP_LOGI(TAG, "Measured distance: %.2fcm", distance);
+            xTaskCreate(http_post_task, "http_post_task", 8192, &distance, 5, NULL);
         }
         vTaskDelay(pdMS_TO_TICKS(500));
     }
