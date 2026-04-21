@@ -171,6 +171,6 @@ void app_main(void)
             ESP_LOGI(TAG, "Measured distance: %.2fcm", distance);
             xTaskCreate(http_post_task, "http_post_task", 8192, &distance, 5, NULL);
         }
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(5000));
     }
 }
